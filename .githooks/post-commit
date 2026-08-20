@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# post-commit hook: after every commit in a nested repo, bump the gitlink
+# in the nearest ancestor git repo (chained up to the workspace root repo).
+#
+# Rules:
+#   - only fires when the gitlink actually changed vs parent HEAD
+#   - only when the parent index has nothing else staged (no surprise sweeps)
+#   - skips during merge/rebase/cherry-pick
+#   - no-ops when there is no parent git repo (e.g. the root repo itself)
+set -euo pipefail
+
+SUB_ROOT="$(git rev-parse --show-toplevel)"
+PARENT_DIR="$(dirname "$SUB_ROOT")"
+
+# walk up until we find a git repo (skips plain dirs, e.g. vendored/)
+candidate="$PARENT_DIR"
+while true; do
+    if git -C "$candidate" rev-parse --git-dir >/dev/null 2>&1; then
+        PROOT="$(git -C "$candidate" rev-parse --show-toplevel)"
+        break
+    fi
+    [ "$candidate" = "/" ] && exit 0
+    candidate="$(dirname "$candidate")"
+done
+
+# gitlink path relative to the parent repo root
+REL="${SUB_ROOT#"$PROOT"/}"
+[ "$REL" != "$SUB_ROOT" ] || exit 0
+
+# this repo must be tracked as a gitlink in the parent
+git -C "$PROOT" ls-files --error-unmatch -- "$REL" >/dev/null 2>&1 || exit 0
+
+# nothing to do if the gitlink didn't change
+git -C "$PROOT" diff --quiet HEAD -- "$REL" && exit 0
+
+# never sweep unrelated staged work into the bump commit
+git -C "$PROOT" diff --cached --quiet || exit 0
+
+# skip during merge/rebase/cherry-pick
+git -C "$PROOT" rev-parse --verify -q MERGE_HEAD >/dev/null 2>&1 && exit 0
+git -C "$PROOT" rev-parse --verify -q CHERRY_PICK_HEAD >/dev/null 2>&1 && exit 0
+[ -d "$(git -C "$PROOT" rev-parse --git-path rebase-merge)" ] && exit 0
+
+SUBJECT="$(git -C "$SUB_ROOT" log -1 --format='%s' 2>/dev/null | head -c 60)"
+git -C "$PROOT" add -- "$REL"
+git -C "$PROOT" commit -q -m "chore: bump $REL ($SUBJECT)"
