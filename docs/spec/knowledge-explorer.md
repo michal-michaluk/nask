@@ -28,13 +28,15 @@ Osobna apka webowa — czat, w którym klient NASK rozmawia po polsku z asystent
 dostęp do istniejącej bazy wiedzy `nask`. Czat odpowiada na pytania o produkty, oferty,
 firmę, punkty obsługi klienta, kontakty oraz pełny pozostały zakres KB (domeny .pl,
 cyberbezpieczeństwo, usługi dla administracji itd.). Odpowiedzi oparte wyłącznie na KB,
-z cytowaniem źródeł. Czat nie jest agentem deweloperskim — nie modyfikuje dokumentacji.
+z cytowaniem źródeł. Czat nie modyfikuje dokumentacji — w bazie egzekwowane instrukcyjnie
+(agent `consultant` z ograniczonymi narzędziami: `rag_search` + `read`); konstrukcyjnie
+→ #5/#3.
 
 Wiedza jest już gotowa: **KB `nask`** w `~/.agents/knowledge/nask/` (337 plików MD,
 2408 chunków w ChromaDB, model `intfloat/multilingual-e5-small`, dostęp przez lokalne CLI
 `rag search`). Aplikacja to adaptacja blueprintu **`web-agentic`** (Next.js 16 + React 19 +
-pi SDK): czat + SSE streaming + sesje, z podmienionym agentem (system prompt czatu
-klienckiego + jeden custom tool `rag_search`).
+pi SDK): czat + SSE streaming + sesje, z agentem `consultant` (wartościowa instrukcja
+czatu klienckiego + niezbędne narzędzia: custom tool `rag_search` i `read`).
 
 ### Materiały wejściowe
 
@@ -74,15 +76,16 @@ Powierzchnia REST + SSE z blueprintu `web-agentic` (adaptacja). Rdzeń, który z
    ```json
    {
      "cwd": "/Users/michal/workspace/bottega-ai-mind/eval/nask",
-     "toolNames": ["read", "bash", "edit", "write", "grep", "find", "ls", "rag_search"],
+     "toolNames": ["rag_search", "read"],
      "initialModel": { "provider": "deepseek", "modelId": "deepseek-v4-flash" },
      "thinkingLevel": "high"
    }
    ```
    Odpowiedź: `{ "sessionId": "<id>" }` (sesja w procesie Next.js, `AgentSessionWrapper`).
 
-   **Uwaga:** w bazie agent działa as-is — pełny zestaw narzędzi blueprintu (jak wyżej).
-   Zawężenie do samego `rag_search` → ticket #5 (minimalizacja).
+   **Uwaga:** pi i UI nie są zmieniane (as-is); ograniczenie narzędzi sesji wynika z agenta
+   `consultant` (frontmatter `tools:`) — `rag_search` + `read`, bez bash/edit/write.
+   Zawężenie konstrukcyjne → ticket #5 (minimalizacja).
 
 2. **Wysłanie wiadomości** — `POST /api/agent/[id]`
 
@@ -98,7 +101,7 @@ Powierzchnia REST + SSE z blueprintu `web-agentic` (adaptacja). Rdzeń, który z
 
 5. **Stan uruchomienia** — `GET /api/agent/running`.
 
-### Custom tool `rag_search` (jedyny tool agenta)
+### Custom tool `rag_search` (jedno z narzędzi agenta `consultant`)
 
 ```
 rag_search(query: string, k?: number)  // k domyślnie 5, max 10
@@ -127,6 +130,7 @@ Zwraca (JSON ze stdout CLI, stderr ignorowane — tam trafiają warningi ładowa
 ```
 
 Agent używa `snippet`/`heading` jako kontekstu i raportuje `file` + `heading` jako cytaty.
+Drugie narzędzie sesji to `read` (odczyt pełnych plików KB — np. gdy snippet nie wystarcza).
 
 ### Custom agent pi `consultant` (G2 — iterowany eksperymentalnie)
 
@@ -141,8 +145,10 @@ Aplikacja przy starcie sesji wczytuje agenta `consultant` z `.pi/agents/consulta
 i używa go jako źródła konfiguracji sesji:
 - **body** pliku → system prompt sesji (przez `systemPromptOverride` w
   `resourceLoaderOptions` — `createAgentSessionServices`, rpc-manager.ts:1670-1676),
-- **tools:** z frontmattera → `toolNames`,
+- **tools:** z frontmattera → `toolNames` (`ext:` prefix strip — `rag_search` + `read`),
 - model/thinking → z konfiguracji apki (deepseek-v4-flash / high).
+
+Pi (runtime) i UI pozostają bez zmian w tym scope.
 
 Dedykowany system prompt (docelowy, środowiskowy) — **Deferred #3** (sandbox).
 
@@ -155,29 +161,32 @@ Dedykowany system prompt (docelowy, środowiskowy) — **Deferred #3** (sandbox)
 - **Model:** pojedynczy `deepseek-v4-flash` (provider `deepseek`), hardcoded w
   `POST /api/agent/new`; bez selektora modeli w UI. Auth: istniejące kredencjały pi
   (`~/.pi/agent/auth.json`, provider deepseek).
-- **Narzędzia:** pełny zestaw blueprintu (read/bash/edit/write/grep/find/ls, worktree,
-  plugins/skills, fork — as-is) + custom tool `rag_search` (przez `extensionFactories` +
-  `pi.registerTool(defineTool(...))`). Minimalizacja — osobny ticket #5.
+- **Narzędzia:** custom tool `rag_search` (przez `extensionFactories` +
+  `pi.registerTool(defineTool(...))`); sesje czatu aktywują wyłącznie narzędzia agenta
+  `consultant`: `rag_search` + `read` (bez bash/edit/write — ograniczenie przez agenta,
+  nie przez zmianę pi). Pełny toolset blueprintu pozostaje dostępny w apce (as-is).
+  Minimalizacja — osobny ticket #5.
 - **Sesje (dev):** istniejące pliki sesji pi `~/.pi/agent/sessions/` (przegląd + zapis),
   jak w blueprintzie. Izolacja sesji — w konteneryzacji (Deferred #3).
 - **Zależności środowiskowe:** `rag` CLI dostępny w PATH hosta (obecnie
   `~/.local/bin/rag`); KB `~/.agents/knowledge/nask` zaindeksowana.
 - **Wydajność:** retrieval lokalny, docelowo < 1–2 s po załadowaniu modelu embeddingów
   (pierwsze wywołanie po restarcie może trwać dłużej — akceptowalne).
-- **Bezpieczeństwo:** brak narzędzi zapisu/wykonania (KB niemodyfikowalna konstrukcyjnie);
-  dev server na `127.0.0.1:30141` + HTTP Basic Auth (wg `docs/arch/deployment.md` blueprintu).
+- **Bezpieczeństwo:** sesje czatu bez narzędzi zapisu/wykonania (tylko `rag_search` + `read`
+  z agenta `consultant` — KB niemodyfikowalna w sesjach czatu); dev server na
+  `127.0.0.1:30141` + HTTP Basic Auth (wg `docs/arch/deployment.md` blueprintu).
+  Konstrukcyjne wymuszenie globalne → #5/#3.
+- **Obsługa błędów:** wg blueprintu (request-security, obsługa błędów RPC/SSE); ścieżki
+  błędów **nie są testowane e2e** w tym scope.
 - **Integracje:** żadnych zewnętrznych poza `rag` CLI (lokalnie) i providerem deepseek.
 
 ## Design & UI/UX
 
-- **Interakcja:** strona czatu — pole tekstowe (ChatInput), historia wiadomości
-  (ChatWindow/MessageView z MarkdownBody), streaming odpowiedzi przez SSE.
-- **Cytaty źródeł (G4):** pod odpowiedzią chipsy „plik + nagłówek" z wyników `rag_search`
-  (np. `domeny/.../dnssec/faq.md — FAQ`), nieliczne (max 3–5), klikalne (podgląd/wskazanie).
-- **Sesje:** slim sidebar z listą sesji (dev: sesje pi); bez zakładek plików/worktree
-  (usunięte z blueprintu).
-- **Mockupy:** UI pochodzi z blueprintu (AppShell/ChatWindow/MessageView/ChatInput) —
-  adaptacja, nie projekt od zera. Iteracje UI wg `ui-prototype.md` w razie potrzeby.
+- **UI bez zmian (S2):** pełny UI blueprintu (AppShell, ChatWindow/MessageView/ChatInput,
+  FileViewer, TabBar, worktree switcher, selektor modeli itd.) — w tym scope nie zmieniamy UI.
+- **Cytowanie źródeł (BR4):** w bazie przez treść odpowiedzi — agent wskazuje źródła
+  (plik + nagłówek) w tekście. UI chipsy cytatów → ticket #4 (rozszerzenia).
+- **Mockupy:** nie są potrzebne — UI pochodzi z blueprintu bez zmian.
 - **Responsywność:** mobilna + desktop (Tailwind wg blueprintu).
 - **Accessibility:** standardy z blueprintu (a11y: `npm run a11y`).
 
@@ -190,6 +199,8 @@ Dedykowany system prompt (docelowy, środowiskowy) — **Deferred #3** (sandbox)
 
 ## Testing Requirements
 
+- **Success metric (DoR):** apka wstaje (`npm run dev`) i **e2e (Playwright)** — wysłanie
+  wiadomości kończy się odpowiedzią agenta (smoke; ścieżki błędów poza zakresem).
 - **Quality gates (deterministyczne, z blueprintu):**
   - G1 `node_modules/.bin/tsc --noEmit`
   - G2 `npm run lint`
@@ -207,20 +218,21 @@ Dedykowany system prompt (docelowy, środowiskowy) — **Deferred #3** (sandbox)
 1. Apka czatu w tym workspace (`eval/nask`), scaffold z blueprintu `web-agentic`.
 2. Custom tool `rag_search` dołączony do zestawu narzędzi agenta (read-only względem KB).
 3. Custom agent pi `consultant` (BR1–BR8) — `.pi/agents/consultant.md`, wypracowywany
-   eksperymentalnie; SYSTEM.md nietknięty.
-4. Chat UI z cytatami źródeł (chipsy plik + nagłówek).
-5. **Agent pi as-is** — filesystem, worktree, plugins/skills, bash, fork, selektor modeli
-   pozostają (bez wycinania).
+   eksperymentalnie; SYSTEM.md nietknięty; **ograniczone narzędzia** (`rag_search` + `read`).
+4. **Pi i UI bez zmian** — pełny blueprint (FileViewer, TabBar, worktree, selektor modeli itd.).
+5. **Agent pi as-is** — runtime pi nietknięty (ograniczenie narzędzi przez agenta
+   `consultant`, nie przez zmianę pi).
 6. Sesje (dev): istniejące pliki sesji pi.
 7. Pojedynczy model `deepseek-v4-flash` (default).
 8. Dev server (`npm run dev`, 127.0.0.1:30141) + HTTP Basic Auth.
+9. E2E smoke (Playwright): apka wstaje, wiadomość → odpowiedź agenta.
 
 ## Out of Scope
 
 - **Deferred (#5):** minimalizacja — usunięcie filesystemu, worktree, plugins/skills, bash,
   fork, selektora modeli; konstrukcyjne read-only (agent tylko `rag_search`).
 - **Deferred (#4):** rozszerzenia funkcjonalne — lead on (mail, kontakt z człowiekiem,
-  dzwonienie), ew. inne.
+  dzwonienie), UI chipsy cytatów źródeł, ew. inne.
 - **Deferred (#3):** microsandbox i bezpieczeństwo — Dockerfile, izolacja sesji/środowiska,
   hardening, **dedykowany system prompt** (docelowy, środowiskowy — zamiast agenta `consultant`
   w formie pliku repo).
@@ -242,7 +254,7 @@ Feature: Knowledge Explorer — czat kliencki z dostępem do bazy wiedzy NASK
 
   Background:
     Given czat działa na modelu "deepseek-v4-flash"
-    And agent ma narzędzia pi (as-is) oraz narzędzie "rag_search"
+    And sesja czatu używa agenta "consultant" z narzędziami "rag_search" i "read"
     And baza wiedzy "nask" jest zaindeksowana
 
   Rule: Odpowiedzi oparte wyłącznie na KB
