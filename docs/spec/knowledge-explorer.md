@@ -43,6 +43,8 @@ klienckiego + jeden custom tool `rag_search`).
 - Blueprint `web-agentic`: `/Users/michal/workspace/bottega-ai-mind/blueprints/web-agentic/` (docs/arch + example)
 - pi SDK: `@earendil-works/pi-coding-agent` (`createAgentSession`, `defineTool`,
   `systemPromptOverride`, `extensionFactories` — zweryfikowane w dist typach)
+- Custom agent pi: `.pi/agents/consultant.md` (w repo; format agentów pi-subagents:
+  `~/.pi/agent/git/github.com/michal-michaluk/pi-subagents/src/custom-agents.ts`)
 
 ### Business Rules
 
@@ -126,20 +128,23 @@ Zwraca (JSON ze stdout CLI, stderr ignorowane — tam trafiają warningi ładowa
 
 Agent używa `snippet`/`heading` jako kontekstu i raportuje `file` + `heading` jako cytaty.
 
-### System prompt czatu klienckiego (G2 — iterowany eksperymentalnie)
+### Custom agent pi `consultant` (G2 — iterowany eksperymentalnie)
 
-Wstrzykiwany przez `systemPromptOverride` w `resourceLoaderOptions`
-(`createAgentSessionServices`, rpc-manager.ts:1670-1676). Rdzeń:
+**SYSTEM.md nie jest modyfikowany.** Zamiast tego czat działa jako custom agent pi `consultant`
+(mechanizm agentów pi-subagents: `<cwd>/.pi/agents/*.md`, frontmatter + body = instrukcje).
 
-- Jesteś asystentem obsługi klienta NASK; odpowiadasz po polsku, zwięźle.
-- Odpowiadaj wyłącznie na podstawie wyników narzędzia `rag_search` (KB `nask`).
-- Zakres: wszystko, co jest w KB (produkty, oferty, firma, punkty obsługi, kontakty, domeny, cyberbezpieczeństwo, usługi dla administracji itd.).
-- Cytuj źródła (plik + nagłówek) przy każdej odpowiedzi opartej na KB.
-- Nie modyfikuj żadnych dokumentów — masz tylko narzędzie wyszukiwania.
-- Kontakt / dane kontaktowe podawaj tylko, gdy klient o to zapyta.
-- Pytania spoza zakresu KB → grzeczna odmowa, bez dyskusji; możesz wskazać kontakt.
-- Jeśli w KB nie ma odpowiedzi — powiedz to wprost i wskaż kontakt.
-- Nie dyskutuj o tematach niezwiązanych z NASK (polityka, filozofia, inne firmy itp.).
+Plik: `.pi/agents/consultant.md` (w repo apki — wersjonowany, przenosi się z apką do sandboxa).
+Frontmatter: `name: consultant`, `description`, `prompt_mode: append`; body = instrukcje BR1–BR8
+(patrz sekcja Business Rules).
+
+Aplikacja przy starcie sesji wczytuje agenta `consultant` z `.pi/agents/consultant.md`
+i używa go jako źródła konfiguracji sesji:
+- **body** pliku → system prompt sesji (przez `systemPromptOverride` w
+  `resourceLoaderOptions` — `createAgentSessionServices`, rpc-manager.ts:1670-1676),
+- **tools:** z frontmattera → `toolNames`,
+- model/thinking → z konfiguracji apki (deepseek-v4-flash / high).
+
+Dedykowany system prompt (docelowy, środowiskowy) — **Deferred #3** (sandbox).
 
 ## Technical Requirements
 
@@ -201,7 +206,8 @@ Wstrzykiwany przez `systemPromptOverride` w `resourceLoaderOptions`
 
 1. Apka czatu w tym workspace (`eval/nask`), scaffold z blueprintu `web-agentic`.
 2. Custom tool `rag_search` dołączony do zestawu narzędzi agenta (read-only względem KB).
-3. System prompt czatu klienckiego (BR1–BR8) — wypracowywany eksperymentalnie.
+3. Custom agent pi `consultant` (BR1–BR8) — `.pi/agents/consultant.md`, wypracowywany
+   eksperymentalnie; SYSTEM.md nietknięty.
 4. Chat UI z cytatami źródeł (chipsy plik + nagłówek).
 5. **Agent pi as-is** — filesystem, worktree, plugins/skills, bash, fork, selektor modeli
    pozostają (bez wycinania).
@@ -216,7 +222,9 @@ Wstrzykiwany przez `systemPromptOverride` w `resourceLoaderOptions`
 - **Deferred (#4):** rozszerzenia funkcjonalne — lead on (mail, kontakt z człowiekiem,
   dzwonienie), ew. inne.
 - **Deferred (#3):** microsandbox i bezpieczeństwo — Dockerfile, izolacja sesji/środowiska,
-  hardening.
+  hardening, **dedykowany system prompt** (docelowy, środowiskowy — zamiast agenta `consultant`
+  w formie pliku repo).
+- Modyfikacja SYSTEM.md.
 - Modyfikacja / uzupełnianie bazy wiedzy (np. sekcja „punkty obsługi, kontakty") — osobny temat.
 - Publiczny hosting, auth wielouserowa.
 - i18n (tylko język polski).
